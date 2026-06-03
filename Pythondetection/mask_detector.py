@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import time
+import tkinter as tk
+from tkinter import filedialog
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +14,8 @@ import numpy as np
 
 BASE_DIR = Path(__file__).resolve().parent
 WINDOW_NAME = "OpenCV Mask Detector"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}
 THEMES = {
     "dark": {
         "name": "Dark",
@@ -237,6 +241,31 @@ def theme_value(key: str):
 def set_theme(theme: str) -> None:
     global CURRENT_THEME
     CURRENT_THEME = theme if theme in THEMES else "dark"
+
+
+def is_image_file(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_EXTENSIONS
+
+
+def is_video_file(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def choose_media_file() -> Path | None:
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    selected = filedialog.askopenfilename(
+        title="Open image or video",
+        filetypes=[
+            ("Images and videos", "*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.avi *.mov *.mkv *.wmv *.m4v"),
+            ("Images", "*.jpg *.jpeg *.png *.bmp *.webp"),
+            ("Videos", "*.mp4 *.avi *.mov *.mkv *.wmv *.m4v"),
+            ("All files", "*.*"),
+        ],
+    )
+    root.destroy()
+    return Path(selected) if selected else None
 
 
 def no_op(_: int) -> None:
@@ -727,7 +756,7 @@ def draw_control_bar(
         "P Pause    F Fullscreen    T Theme"
     )
     line2 = (
-        "+/- Brightness    ,/. Contrast    S Snapshot    "
+        "O Open media    +/- Brightness    ,/. Contrast    S Snapshot    "
         "X False+    V False-    H Help    Q/Esc Quit"
     )
     y1 = frame.shape[0] - 72
@@ -845,6 +874,33 @@ def process_frame(
     return output, face_count, no_mask_count
 
 
+def detect_image_file(
+    path: Path,
+    face_cascades: list[cv2.CascadeClassifier],
+    mouth_cascade: cv2.CascadeClassifier,
+    dl_classifier: DeepLearningMaskClassifier | None,
+    args: argparse.Namespace,
+    tracker: FaceTracker,
+) -> np.ndarray | None:
+    frame = cv2.imread(str(path))
+    if frame is None:
+        return None
+
+    tracker.tracks.clear()
+    output, face_count, no_mask_count, quality_tips = process_frame_detailed(
+        frame,
+        face_cascades,
+        mouth_cascade,
+        dl_classifier,
+        args,
+        tracker,
+    )
+    draw_overall_status(output, face_count, no_mask_count, no_mask_count > 0, 0.0, dl_classifier is not None)
+    draw_quality_tips(output, quality_tips)
+    draw_text(output, f"Image: {path.name}", (18, 116), 17, theme_value("muted"))
+    return output
+
+
 def configure_capture(cap: cv2.VideoCapture, args: argparse.Namespace) -> None:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
@@ -854,7 +910,7 @@ def configure_capture(cap: cv2.VideoCapture, args: argparse.Namespace) -> None:
 
 def open_capture(source: int | str, args: argparse.Namespace) -> cv2.VideoCapture:
     cap = cv2.VideoCapture(source)
-    if cap.isOpened() and not args.video:
+    if cap.isOpened() and isinstance(source, int):
         configure_capture(cap, args)
     return cap
 
@@ -945,11 +1001,12 @@ def main() -> None:
         cv2.destroyAllWindows()
         return
     source: int | str = str(resolve_path(args.video)) if args.video else args.camera
+    source_is_video = bool(args.video)
     cap = open_capture(source, args)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
 
-    if not args.video:
+    if isinstance(source, int):
         actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         actual_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -982,7 +1039,7 @@ def main() -> None:
                 state.camera_enabled = False
                 cap.release()
                 frame = np.zeros((args.height, args.width, 3), dtype=np.uint8)
-                if args.video:
+                if source_is_video:
                     video_finished = True
                     frame[:, :] = theme_value("camera_off")
                     draw_text(frame, "Video finished", (frame.shape[1] // 2 - 110, frame.shape[0] // 2), 30, theme_value("text"))
@@ -1033,6 +1090,9 @@ def main() -> None:
                 state.paused = False
                 alarm_gate.update(False)
             else:
+                if state.paused and state.frozen_frame is not None and not source_is_video:
+                    source = args.camera
+                    source_is_video = False
                 cap = open_capture(source, args)
                 state.camera_enabled = cap.isOpened()
                 state.paused = False
@@ -1061,6 +1121,43 @@ def main() -> None:
         elif key in (ord("s"), ord("S")):
             snapshot_path = save_snapshot(last_display_frame)
             print(f"Snapshot saved: {snapshot_path}")
+        elif key in (ord("o"), ord("O")):
+            selected = choose_media_file()
+            if selected is not None:
+                if is_image_file(selected):
+                    image_result = detect_image_file(
+                        selected,
+                        face_cascades,
+                        mouth_cascade,
+                        dl_classifier,
+                        args,
+                        tracker,
+                    )
+                    if image_result is not None:
+                        cap.release()
+                        state.camera_enabled = False
+                        state.paused = True
+                        state.frozen_frame = image_result
+                        source_is_video = False
+                        video_finished = False
+                        print(f"Opened image: {selected}")
+                    else:
+                        print(f"Could not read image: {selected}")
+                elif is_video_file(selected):
+                    cap.release()
+                    source = str(selected)
+                    source_is_video = True
+                    cap = open_capture(source, args)
+                    state.camera_enabled = cap.isOpened()
+                    state.paused = False
+                    state.frozen_frame = None
+                    video_finished = False
+                    tracker.tracks.clear()
+                    last_frame_time = time.perf_counter()
+                    smoothed_fps = 0.0
+                    print(f"Opened video: {selected}")
+                else:
+                    print(f"Unsupported media file: {selected}")
         elif key in (ord("x"), ord("X")):
             correction_path = save_training_frame(last_display_frame, "false_positive")
             print(f"False positive frame saved: {correction_path}")
