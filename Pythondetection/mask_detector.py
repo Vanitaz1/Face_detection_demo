@@ -8,20 +8,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 
 
 BASE_DIR = Path(__file__).resolve().parent
 WINDOW_NAME = "OpenCV Mask Detector"
-FONT_PATHS = [
-    Path("C:/Windows/Fonts/msyh.ttc"),
-    Path("C:/Windows/Fonts/simhei.ttf"),
-    Path("C:/Windows/Fonts/simsun.ttc"),
-]
-FONT_CACHE: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
 THEMES = {
     "dark": {
-        "name": "\u6df1\u8272",
+        "name": "Dark",
         "panel": (18, 22, 28),
         "panel_border": (70, 78, 88),
         "text": (245, 248, 252),
@@ -29,7 +22,7 @@ THEMES = {
         "camera_off": (24, 28, 34),
     },
     "light": {
-        "name": "\u6d45\u8272",
+        "name": "Light",
         "panel": (236, 240, 245),
         "panel_border": (180, 188, 198),
         "text": (26, 32, 40),
@@ -37,7 +30,7 @@ THEMES = {
         "camera_off": (226, 231, 238),
     },
     "contrast": {
-        "name": "\u9ad8\u5bf9\u6bd4",
+        "name": "High contrast",
         "panel": (0, 0, 0),
         "panel_border": (0, 255, 255),
         "text": (255, 255, 255),
@@ -200,23 +193,10 @@ class ConsecutiveAlarmGate:
         return self.current_frames >= self.required_frames
 
 
-def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if size in FONT_CACHE:
-        return FONT_CACHE[size]
-
-    for path in FONT_PATHS:
-        if path.exists():
-            FONT_CACHE[size] = ImageFont.truetype(str(path), size)
-            return FONT_CACHE[size]
-
-    FONT_CACHE[size] = ImageFont.load_default()
-    return FONT_CACHE[size]
-
-
 def text_size(text: str, size: int) -> tuple[int, int]:
-    font = get_font(size)
-    box = font.getbbox(text)
-    return box[2] - box[0], box[3] - box[1]
+    scale = size / 30.0
+    (width, height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+    return width, height
 
 
 def draw_text(
@@ -226,19 +206,26 @@ def draw_text(
     size: int,
     color: tuple[int, int, int],
 ) -> None:
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    image = Image.fromarray(rgb)
-    draw = ImageDraw.Draw(image)
-    draw.text(position, text, font=get_font(size), fill=(color[2], color[1], color[0]))
-    frame[:, :] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    scale = size / 30.0
+    x, y = position
+    cv2.putText(
+        frame,
+        text,
+        (x, y + size),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        scale,
+        color,
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def display_label(label: str) -> str:
     labels = {
-        "MASK": "\u5df2\u6234\u53e3\u7f69",
-        "NO MASK": "\u672a\u6234\u53e3\u7f69",
-        "BLOCKED": "\u906e\u6321\u5f02\u5e38",
-        "UNCERTAIN": "\u4e0d\u786e\u5b9a",
+        "MASK": "MASK",
+        "NO MASK": "NO MASK",
+        "BLOCKED": "BLOCKED",
+        "UNCERTAIN": "UNCERTAIN",
     }
     return labels.get(label, label)
 
@@ -290,9 +277,9 @@ def face_quality_tips(
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     brightness = float(np.mean(gray))
     if brightness < 55:
-        tips.append("\u5149\u7ebf\u4e0d\u8db3")
+        tips.append("Low light")
     elif brightness > 215:
-        tips.append("\u753b\u9762\u8fc7\u4eae")
+        tips.append("Too bright")
 
     if not faces:
         return tips
@@ -300,14 +287,14 @@ def face_quality_tips(
     frame_area = frame.shape[0] * frame.shape[1]
     largest_ratio = max((w * h) / frame_area for _, _, w, h in faces)
     if largest_ratio < 0.025:
-        tips.append("\u8bf7\u9760\u8fd1\u4e00\u4e9b")
+        tips.append("Move closer")
     elif largest_ratio > 0.38:
-        tips.append("\u8bf7\u540e\u9000\u4e00\u4e9b")
+        tips.append("Move back")
 
     for _, _, w, h in faces:
         ratio = w / max(h, 1)
         if ratio < 0.68 or ratio > 1.32:
-            tips.append("\u8bf7\u5c3d\u91cf\u6b63\u5bf9\u6444\u50cf\u5934")
+            tips.append("Face the camera")
             break
     return tips[:3]
 
@@ -683,13 +670,13 @@ def draw_dashboard(
     cv2.rectangle(overlay, (x1, y1), (x2, y2), theme_value("panel"), -1)
     cv2.addWeighted(overlay, 0.68, frame, 0.32, 0, frame)
     cv2.rectangle(frame, (x1, y1), (x2, y2), theme_value("panel_border"), 1, cv2.LINE_AA)
-    draw_text(frame, "\u5b9e\u65f6\u68c0\u6d4b\u9762\u677f", (x1 + 16, y1 + 14), 19, theme_value("text"))
+    draw_text(frame, "LIVE DETECTION", (x1 + 16, y1 + 14), 19, theme_value("text"))
 
     rows = [
-        ("\u4eba\u8138", str(face_count), (120, 210, 255)),
-        ("\u63d0\u9192", str(no_mask_count), (0, 0, 255) if no_mask_count else (0, 190, 0)),
-        ("\u5e27\u7387", f"{fps:4.1f}" if fps > 0 else "--", theme_value("text")),
-        ("\u6a21\u5f0f", "\u6a21\u578b" if has_model else "\u89c4\u5219", theme_value("text")),
+        ("Faces", str(face_count), (120, 210, 255)),
+        ("Alerts", str(no_mask_count), (0, 0, 255) if no_mask_count else (0, 190, 0)),
+        ("FPS", f"{fps:4.1f}" if fps > 0 else "--", theme_value("text")),
+        ("Mode", "ONNX" if has_model else "Rules", theme_value("text")),
     ]
     for index, (name, value, value_color) in enumerate(rows):
         row_y = y1 + 56 + index * 22
@@ -708,7 +695,7 @@ def draw_quality_tips(frame: np.ndarray, tips: list[str]) -> None:
     if not tips:
         return
 
-    text = "\u63d0\u793a\uff1a" + " / ".join(tips)
+    text = "Tip: " + " / ".join(tips)
     width, height = text_size(text, 19)
     x1 = 14
     y1 = 66
@@ -731,17 +718,17 @@ def draw_control_bar(
     if not show_help:
         return
 
-    on_text = "\u5f00"
-    off_text = "\u5173"
+    on_text = "On"
+    off_text = "Off"
     line1 = (
-        f"C \u6444\u50cf\u5934:{on_text if camera_enabled else off_text}    "
-        f"D \u68c0\u6d4b:{on_text if detection_enabled else off_text}    "
-        f"A \u62a5\u8b66:{on_text if alarm_enabled else off_text}    "
-        "P \u6682\u505c    F \u5168\u5c4f    T \u4e3b\u9898"
+        f"C Camera:{on_text if camera_enabled else off_text}    "
+        f"D Detection:{on_text if detection_enabled else off_text}    "
+        f"A Alarm:{on_text if alarm_enabled else off_text}    "
+        "P Pause    F Fullscreen    T Theme"
     )
     line2 = (
-        "+/- \u4eae\u5ea6    ,/. \u5bf9\u6bd4\u5ea6    S \u622a\u56fe    "
-        "X \u5047\u9633\u6027    V \u5047\u9634\u6027    H \u63d0\u793a    Q/Esc \u9000\u51fa"
+        "+/- Brightness    ,/. Contrast    S Snapshot    "
+        "X False+    V False-    H Help    Q/Esc Quit"
     )
     y1 = frame.shape[0] - 72
     overlay = frame.copy()
@@ -757,9 +744,9 @@ def draw_camera_off_screen(frame: np.ndarray, show_help: bool, alarm_enabled: bo
     cy = frame.shape[0] // 2
     cv2.circle(frame, (cx, cy - 35), 42, (68, 76, 88), 2, cv2.LINE_AA)
     cv2.line(frame, (cx - 25, cy - 10), (cx + 25, cy - 60), (68, 76, 88), 3, cv2.LINE_AA)
-    draw_text(frame, "\u6444\u50cf\u5934\u5df2\u5173\u95ed", (cx - 82, cy + 8), 28, theme_value("text"))
-    draw_text(frame, "\u6309 C \u91cd\u65b0\u5f00\u542f\u6444\u50cf\u5934", (cx - 112, cy + 48), 20, theme_value("muted"))
-    draw_dashboard(frame, "\u6444\u50cf\u5934\u5df2\u5173\u95ed", (180, 180, 180), 0, 0, 0.0, False)
+    draw_text(frame, "Camera off", (cx - 82, cy + 8), 28, theme_value("text"))
+    draw_text(frame, "Press C to reopen camera", (cx - 112, cy + 48), 20, theme_value("muted"))
+    draw_dashboard(frame, "Camera off", (180, 180, 180), 0, 0, 0.0, False)
     draw_control_bar(frame, False, False, alarm_enabled, show_help)
 
 
@@ -828,11 +815,11 @@ def process_frame_detailed(
 
         draw_corner_box(frame, ex, ey, ew, eh, result.color)
         if result.method == "deep-learning":
-            label = f"{display_label(result.label)} \u6a21\u578b={result.confidence:.2f}"
+            label = f"{display_label(result.label)} model={result.confidence:.2f}"
         elif result.label == "BLOCKED":
-            label = f"{display_label(result.label)} \u906e\u6321={result.confidence:.2f}"
+            label = f"{display_label(result.label)} obs={result.confidence:.2f}"
         else:
-            label = f"{display_label(result.label)} \u89c4\u5219={result.confidence:.2f} \u80a4\u8272={result.skin_ratio:.2f}"
+            label = f"{display_label(result.label)} rule={result.confidence:.2f} skin={result.skin_ratio:.2f}"
         track_id = track_ids.get((ex, ey, ew, eh))
         if track_id is not None:
             label = f"ID {track_id}  {label}"
@@ -907,16 +894,16 @@ def draw_overall_status(
     has_model: bool,
 ) -> None:
     if face_count == 0:
-        status_text = "\u672a\u68c0\u6d4b\u5230\u4eba\u8138"
+        status_text = "No face/person detected"
         status_color = (180, 180, 180)
     elif should_alarm:
-        status_text = "\u8b66\u544a\uff1a\u672a\u6234\u53e3\u7f69\u6216\u906e\u6321\u5f02\u5e38"
+        status_text = "WARNING: no mask or blocked"
         status_color = (0, 0, 255)
     elif no_mask_count > 0:
-        status_text = "\u68c0\u67e5\u4e2d\uff1a\u53ef\u80fd\u672a\u6234\u53e3\u7f69"
+        status_text = "Checking: possible no mask"
         status_color = (0, 180, 255)
     else:
-        status_text = "\u53e3\u7f69\u68c0\u6d4b\u8fd0\u884c\u4e2d"
+        status_text = "Mask check running"
         status_color = (0, 180, 0)
 
     if should_alarm:
@@ -987,7 +974,7 @@ def main() -> None:
 
         if state.paused and state.frozen_frame is not None:
             frame = state.frozen_frame.copy()
-            draw_dashboard(frame, "\u753b\u9762\u5df2\u6682\u505c", (0, 180, 255), 0, 0, smoothed_fps, dl_classifier is not None)
+            draw_dashboard(frame, "Paused", (0, 180, 255), 0, 0, smoothed_fps, dl_classifier is not None)
             draw_control_bar(frame, state.camera_enabled, state.detection_enabled, state.alarm_enabled, state.show_help)
         elif state.camera_enabled:
             ok, frame = cap.read()
@@ -998,8 +985,8 @@ def main() -> None:
                 if args.video:
                     video_finished = True
                     frame[:, :] = theme_value("camera_off")
-                    draw_text(frame, "\u89c6\u9891\u56de\u653e\u7ed3\u675f", (frame.shape[1] // 2 - 110, frame.shape[0] // 2), 30, theme_value("text"))
-                    draw_text(frame, "\u6309 C \u91cd\u65b0\u64ad\u653e\uff0c\u6309 Q \u9000\u51fa", (frame.shape[1] // 2 - 135, frame.shape[0] // 2 + 44), 20, theme_value("muted"))
+                    draw_text(frame, "Video finished", (frame.shape[1] // 2 - 110, frame.shape[0] // 2), 30, theme_value("text"))
+                    draw_text(frame, "Press C to replay, Q to quit", (frame.shape[1] // 2 - 135, frame.shape[0] // 2 + 44), 20, theme_value("muted"))
                     draw_control_bar(frame, False, state.detection_enabled, state.alarm_enabled, state.show_help)
                 else:
                     draw_camera_off_screen(frame, state.show_help, state.alarm_enabled)
@@ -1020,15 +1007,15 @@ def main() -> None:
                 else:
                     frame = enhance_frame(frame, args.sharpen, args.denoise)
                     alarm_gate.update(False)
-                    draw_dashboard(frame, "\u68c0\u6d4b\u5df2\u6682\u505c", (0, 180, 255), 0, 0, smoothed_fps, dl_classifier is not None)
+                    draw_dashboard(frame, "Detection paused", (0, 180, 255), 0, 0, smoothed_fps, dl_classifier is not None)
 
                 draw_control_bar(frame, state.camera_enabled, state.detection_enabled, state.alarm_enabled, state.show_help)
         else:
             frame = np.zeros((args.height, args.width, 3), dtype=np.uint8)
             if video_finished:
                 frame[:, :] = theme_value("camera_off")
-                draw_text(frame, "\u89c6\u9891\u56de\u653e\u7ed3\u675f", (frame.shape[1] // 2 - 110, frame.shape[0] // 2), 30, theme_value("text"))
-                draw_text(frame, "\u6309 C \u91cd\u65b0\u64ad\u653e\uff0c\u6309 Q \u9000\u51fa", (frame.shape[1] // 2 - 135, frame.shape[0] // 2 + 44), 20, theme_value("muted"))
+                draw_text(frame, "Video finished", (frame.shape[1] // 2 - 110, frame.shape[0] // 2), 30, theme_value("text"))
+                draw_text(frame, "Press C to replay, Q to quit", (frame.shape[1] // 2 - 135, frame.shape[0] // 2 + 44), 20, theme_value("muted"))
                 draw_control_bar(frame, False, state.detection_enabled, state.alarm_enabled, state.show_help)
             else:
                 draw_camera_off_screen(frame, state.show_help, state.alarm_enabled)
